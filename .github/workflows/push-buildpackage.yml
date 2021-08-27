@@ -1,0 +1,53 @@
+name: Push Buildpackage
+
+on:
+  release:
+    types:
+    - published
+
+env:
+  REGISTRY: ghcr.io
+  IMAGE_NAME: ${{ github.repository }}
+
+jobs:
+  push:
+    name: Push
+    runs-on: ubuntu-latest
+    steps:
+
+    - name: Parse Event
+      id: event
+      run: |
+        echo "::set-output name=tag::$(jq -r '.release.tag_name' "${GITHUB_EVENT_PATH}" | sed s/^v//)"
+        echo "::set-output name=download_url::$(jq -r '.release.assets[] | select(.name | endswith(".cnb")) | .url' "${GITHUB_EVENT_PATH}")"
+
+    - name: Download
+      id: download
+      uses: paketo-buildpacks/github-config/actions/release/download-asset@main
+      with:
+        url: ${{ steps.event.outputs.download_url }}
+        output: "/github/workspace/buildpackage.cnb"
+        token: ${{ secrets.GITHUB_TOKEN }}
+
+    - name: Validate version
+      run: |
+        buidpackTomlVersion=$(sudo skopeo inspect "oci-archive:${GITHUB_WORKSPACE}/buildpackage.cnb" | jq -r '.Labels."io.buildpacks.buildpackage.metadata" | fromjson | .version')
+        githubReleaseVersion="${{ steps.event.outputs.tag }}"
+        if [[ "$buidpackTomlVersion" != "$githubReleaseVersion" ]]; then
+          echo "Version in buildpack.toml ($buidpackTomlVersion) and github release ($githubReleaseVersion) are not identical"
+          exit 1
+        fi
+
+    - name: Push to GitHub Registry
+      id: push
+      env:
+        USERNAME: ${{ github.actor }}
+        PASSWORD: ${{ secrets.GITHUB_TOKEN }}
+        REPOSITORY: ${{ github.repository }}
+      run: |
+        IMAGE="${REGISTRY}/${REPOSITORY}"
+        echo "${PASSWORD}" | sudo skopeo login --username "${USERNAME}" --password-stdin ${REGISTRY}
+        sudo skopeo copy "oci-archive:${GITHUB_WORKSPACE}/buildpackage.cnb" "docker://${IMAGE}:${{ steps.event.outputs.tag }}"
+        sudo skopeo copy "oci-archive:${GITHUB_WORKSPACE}/buildpackage.cnb" "docker://${IMAGE}:latest"
+        echo "::set-output name=image::${IMAGE}"
+        echo "::set-output name=digest::$(sudo skopeo inspect "oci-archive:${GITHUB_WORKSPACE}/buildpackage.cnb" | jq -r .Digest)"
