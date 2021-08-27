@@ -12,10 +12,12 @@ func Build(environment Environment, logger scribe.Logger) packit.BuildFunc {
 		layer, err := context.Layers.Get("nodeconfig")
 		if err != nil {
 			return packit.BuildResult{}, err
-
 		}
 
-		environment.Configure(layer.BuildEnv)
+		err = environment.Configure(layer.BuildEnv)
+		if err != nil {
+			return packit.BuildResult{}, err
+		}
 
 		logger.Break()
 
